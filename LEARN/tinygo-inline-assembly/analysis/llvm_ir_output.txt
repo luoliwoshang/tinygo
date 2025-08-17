@@ -1,0 +1,173 @@
+# TinyGo 内联汇编 LLVM IR 输出分析
+
+## 实际IR输出示例
+
+### 1. WFI指令在SystemReset中的使用
+```llvm
+; SystemReset函数中的无限循环
+for.body:                                         ; preds = %for.body, %gep.next
+  call void asm sideeffect "wfi", ""(), !dbg !21227
+  br label %for.body, !dbg !21226
+```
+
+### 2. WFE指令的独立函数
+```llvm
+; runtime.waitForEvents函数
+define internal void @runtime.waitForEvents(ptr %context) unnamed_addr #0 !dbg !57896 {
+entry:
+  call void asm sideeffect "wfe", ""(), !dbg !57898
+  ret void, !dbg !57899
+}
+```
+
+### 3. 带寄存器约束的内联汇编
+```llvm
+; 带约束的指令
+call void asm sideeffect "", "r"(ptr %2), !dbg !57583
+```
+
+### 4. 空main函数对比
+```llvm
+; 空的main函数
+define internal void @main.main(ptr %context) #0 !dbg !26580 {
+entry:
+  %stackalloc = alloca i8, align 1, !dbg !26582
+  ret void, !dbg !26583
+}
+```
+
+### 5. 调用内联汇编的main函数
+```llvm
+; 调用device.Asm的main函数
+define internal void @main.main(ptr %context) #0 !dbg !59077 {
+entry:
+  call void @main.asmDemo(ptr @"main$string", i32 3, ptr undef), !dbg !59078
+  ret void, !dbg !59079
+}
+```
+
+## IR结构分析
+
+### 内联汇编调用格式
+```llvm
+call void asm sideeffect "指令", "约束"(参数列表), !dbg !调试信息
+```
+
+### 关键组件说明
+
+1. **call void asm**: 调用内联汇编
+2. **sideeffect**: 标记有副作用，防止编译器优化删除
+3. **"wfi"**: 实际的汇编指令字符串
+4. **""**: 约束字符串
+   - 空字符串: 无输入输出
+   - "r": 通用寄存器约束
+   - "m": 内存约束
+5. **()**: 参数列表，对应约束中的操作数
+6. **!dbg**: 调试信息元数据引用
+
+### 约束类型示例
+
+```llvm
+; 无约束 - 简单指令
+call void asm sideeffect "nop", ""()
+
+; 寄存器约束 - 使用寄存器
+call void asm sideeffect "mov $1, %0", "=r,r"(i32 %value)
+
+; 内存约束 - 内存操作
+call void asm sideeffect "str $1, $0", "=m,r"(ptr %addr, i32 %value)
+```
+
+## 编译流程对比
+
+### Go源码
+```go
+import "device/arm"
+
+func main() {
+    arm.Asm("wfi")
+}
+```
+
+### SSA中间表示
+```
+t0 = const "wfi"
+call device/arm.Asm(t0)
+```
+
+### LLVM IR
+```llvm
+call void asm sideeffect "wfi", ""()
+```
+
+### 最终汇编
+```asm
+wfi
+```
+
+## 目标架构差异
+
+### ARM (microbit目标)
+```llvm
+target triple = "thumbv6m-unknown-unknown-eabi"
+call void asm sideeffect "wfi", ""()
+```
+
+### WASM (wasm目标)  
+```llvm
+target triple = "wasm32-unknown-wasi"
+; 内联汇编在WASM中可能被转换或忽略
+```
+
+### RISC-V
+```llvm
+target triple = "riscv32-unknown-unknown-elf"
+call void asm sideeffect "wfi", ""()
+```
+
+## 优化影响
+
+### 优化级别对比
+
+#### -opt=0 (无优化)
+```llvm
+; 保留所有调用，包括可能的冗余
+call void asm sideeffect "nop", ""()
+call void asm sideeffect "nop", ""()
+```
+
+#### -opt=2 (高度优化)
+```llvm
+; 可能合并或重排，但sideeffect防止删除
+call void asm sideeffect "nop", ""()
+```
+
+## 调试信息
+
+### 带调试的IR
+```llvm
+call void asm sideeffect "wfi", ""(), !dbg !21227
+
+; 调试元数据
+!21227 = !DILocation(line: 8, column: 5, scope: !59077)
+```
+
+### 调试信息包含
+- 源文件行号
+- 列号  
+- 作用域信息
+- 函数上下文
+
+## 性能特征
+
+### 零开销抽象
+- 编译时完全内联
+- 无函数调用开销
+- 直接生成目标指令
+
+### 内存布局
+- 指令直接嵌入代码段
+- 无额外内存分配
+- 缓存友好的布局
+
+这些IR输出展示了TinyGo如何高效地将Go语言的内联汇编调用转换为底层的机器指令。
