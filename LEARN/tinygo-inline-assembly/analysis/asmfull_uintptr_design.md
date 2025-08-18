@@ -160,6 +160,55 @@ func AsmFull(asm string, regs map[string]interface{}) uintptr
 
 **统一接口**：所有架构使用相同的函数签名和返回类型
 
+## 🔧 多个 `{}` 占位符行为分析
+
+### 重要发现：多重占位符的处理
+
+通过对 `compiler/inlineasm.go:76-83` 代码分析发现：
+
+**源码分析**：
+```go
+asmString = regexp.MustCompile(`\{\}`).ReplaceAllStringFunc(asmString, func(s string) string {
+    hasOutput = true
+    return "$0"  // 所有{}都映射到同一个寄存器
+})
+if hasOutput {
+    constraints = append(constraints, "=&r")  // 只有一个输出约束
+    registerNumbers[""] = 0                   // 统一映射到寄存器0
+}
+```
+
+**行为特征**：
+
+1. **多个 `{}` 允许存在**：`ReplaceAllStringFunc` 会处理字符串中的**所有** `{}` 占位符
+
+2. **共享同一输出寄存器**：
+   - 所有 `{}` 都被替换为 `"$0"`
+   - 只添加一个输出约束 `"=&r"`
+   - 只能返回一个 `uintptr` 值
+
+3. **实际转换示例**：
+   ```go
+   // 输入汇编
+   "mov {}, r1; mov {}, r2"
+   
+   // 转换后的LLVM内联汇编
+   "mov $0, r1; mov $0, r2"
+   
+   // 约束：只有一个输出寄存器
+   "=&r"
+   ```
+
+4. **返回值行为**：
+   - 多个 `{}` 实际上是**冗余的**
+   - 最后写入该寄存器的指令决定最终返回值
+   - 前面的写入会被覆盖
+
+**设计含义**：
+- `AsmFull` 从设计上就是**单值输出**优化的
+- 多个 `{}` 虽然语法允许，但逻辑上无意义
+- 需要多个返回值时，应使用命名寄存器 `{name}` 配合 `regs` 参数
+
 ## 🎯 总结
 
 ### 核心要点
@@ -177,6 +226,11 @@ func AsmFull(asm string, regs map[string]interface{}) uintptr
    - 基于 `{}` 占位符检测输出需求
    - 固定使用 `uintptr` 作为返回类型
    - 通过 LLVM 内联汇编的 `"=&r"` 约束实现
+
+4. **多重占位符限制**
+   - 多个 `{}` 语法上允许，但共享同一输出寄存器
+   - 设计上为单值返回优化
+   - 体现了简化设计的哲学
 
 ### 设计优势
 
