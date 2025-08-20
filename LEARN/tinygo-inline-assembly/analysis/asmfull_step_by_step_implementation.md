@@ -310,6 +310,60 @@ if registerMap, ok := instr.Args[1].(*ssa.MakeMap); ok {
 - 不能是运行时变量（无法静态分析）
 - 必须在同一基本块（避免控制流复杂性）
 
+#### 同一基本块约束详解
+
+**基本块概念**：一段顺序执行的代码，没有分支跳转
+
+```ssa
+entry:              // 基本块1
+  %0 = MakeMap()
+  %1 = MapUpdate(%0, "r0", value)
+  br %if.cond
+
+if.then:            // 基本块2
+  %2 = MapUpdate(%1, "r1", value1)
+  br %if.end
+
+if.else:            // 基本块3
+  %3 = MapUpdate(%1, "r1", value2)
+  br %if.end
+```
+
+**约束检查代码**：
+```go
+if r.Block() != registerMap.Block() {
+    return llvm.Value{}, b.makeError(instr.Pos(), 
+        "register value map must be created in the same basic block")
+}
+```
+
+**正确示例**（同一基本块）：
+```go
+// ✅ 所有map操作在同一基本块
+regMap := map[string]interface{}{
+    "r0": &result,  // MakeMap和MapUpdate都在entry块
+    "r1": a,
+}
+device.AsmFull("add {r0}, {r1}, #42", regMap)
+```
+
+**错误示例**（跨基本块）：
+```go
+// ❌ 跨基本块的map构建
+var regMap map[string]interface{}
+if condition {
+    regMap = map[string]interface{}{"r0": &result}  // MakeMap在if.then块
+} else {
+    regMap = map[string]interface{}{"r0": &other}   // MakeMap在if.else块
+}
+device.AsmFull("mov {r0}, #42", regMap)  // 编译错误：跨基本块
+```
+
+**技术原因**：
+- **编译时确定性**：编译器需要在编译时完全确定map内容
+- **SSA分析限制**：跨基本块需要复杂的控制流分析和φ节点处理
+- **避免歧义**：防止编译器无法确定执行路径时的map状态
+
 ### 1. 操作数编号规律
 
 | 情况 | `{}` 输出 | `{name}` 输入 | 编号规律 |
@@ -413,16 +467,35 @@ call void asm sideeffect "add ${0}, ${1}, ${2}", "r,r,r"(ptr %result, i32 %a, i3
 
 ### 5. 错误处理机制
 
+#### 5.1 基本块约束验证
 ```go
-// 编译时验证
 if r.Block() != registerMap.Block() {
     return llvm.Value{}, b.makeError(instr.Pos(), 
         "register value map must be created in the same basic block")
 }
+```
 
-// 参数检查
+**检查逻辑**：
+- `registerMap.Block()`：MakeMap指令所在的基本块
+- `r.Block()`：MapUpdate指令所在的基本块  
+- 必须相同，否则编译错误
+
+#### 5.2 参数有效性检查
+```go
 if _, ok := registers[name]; !ok {
     err = b.makeError(instr.Pos(), "unknown register name: "+name)
+}
+```
+
+#### 5.3 类型支持检查
+```go
+switch registers[name].Type().TypeKind() {
+case llvm.IntegerTypeKind:
+    constraints = append(constraints, "r")
+case llvm.PointerTypeKind:
+    err = b.makeError(instr.Pos(), "support for pointer operands was dropped in TinyGo 0.23")
+default:
+    err = b.makeError(instr.Pos(), "unknown type in inline assembly for value: "+name)
 }
 ```
 
@@ -430,6 +503,7 @@ if _, ok := registers[name]; !ok {
 - 所有错误在编译时发现
 - 提供精确的错误位置信息
 - 防止运行时意外错误
+- 强制编程模式的一致性
 
 ## 🎯 性能优化分析
 
