@@ -13,6 +13,7 @@
 - 固件生成和烧录流程
 - 内存布局和链接策略
 - Bootloader机制和启动流程
+- call_start_cpu0入口点解析
 
 ## 文件结构
 
@@ -22,6 +23,7 @@ esp32-build-analysis/
 ├── build-process.md           # 完整构建流程分析
 ├── target-configs.md          # 目标配置文件分析
 ├── bootloader-explanation.md  # Bootloader机制详解
+├── call_start_cpu0-analysis.md # 入口点机制详解
 ├── key-findings.md            # 核心技术发现总结
 ├── examples/                  # 构建示例
 │   ├── hello-world/          # 基础示例
@@ -69,6 +71,7 @@ esp32-coreboard-v2 → esp32 → xtensa
 ## 下一步调查方向
 
 - [x] **Bootloader机制深度分析** - 已完成
+- [x] **call_start_cpu0入口点机制** - 已完成  
 - [ ] 实际构建测试和性能分析
 - [ ] 与ESP-IDF启动时间和Flash使用的定量对比  
 - [ ] 内联汇编在ESP32上的具体实现

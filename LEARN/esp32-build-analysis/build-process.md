@@ -188,7 +188,17 @@ ESP32上电 → ROM Bootloader → 读取Flash 0x1000 → 校验镜像 →
 ```
 
 ### Xtensa架构初始化 (`src/device/esp/esp32.S`)
+
+#### call_start_cpu0 入口点的完整链路
+```
+汇编源码定义 → 目标配置包含 → 链接脚本声明 → ELF入口点 → ESP32镜像头部 → ROM bootloader跳转
+```
+
+**1. 汇编源码定义** (`src/device/esp/esp32.S`):
 ```asm
+// Only calling it call_start_cpu0 for consistency with ESP-IDF.
+.section .text.call_start_cpu0
+.global call_start_cpu0
 call_start_cpu0:
     // 1. 禁用寄存器窗口溢出
     rsr.ps a2
@@ -204,12 +214,40 @@ call_start_cpu0:
     wsr.windowstart a2
     
     // 3. 加载栈指针
-    l32r sp, _stack_top    // 来自链接脚本
+    l32r sp, _stack_top    // 来自链接脚本的栈顶地址
     
-    // 4. 启用寄存器窗口
+    // 4. 重新启用寄存器窗口
+    rsr.ps a2
+    movi a3, PS_WOE
+    or a2, a2, a3
+    wsr.ps a2
+    
     // 5. 启用FPU协处理器
+    movi a2, 1
+    wsr.cpenable a2
+    
     // 6. 跳转到Go运行时
     call4 main             // 调用Go main函数
+```
+
+**2. 链接脚本声明** (`targets/esp32.ld`):
+```ld
+ENTRY(call_start_cpu0)  // 设置ELF入口点
+
+SECTIONS {
+    .text : ALIGN(4) {
+        *(.literal.call_start_cpu0)  // 字面量优先
+        *(.text.call_start_cpu0)     // 启动代码放在最前面
+        *(.literal .text)
+        *(.literal.* .text.*)
+    } >IRAM
+}
+```
+
+**3. 固件镜像生成** (`builder/esp.go`):
+```go
+// ESP32镜像头部记录入口地址
+entry_addr: uint32(inf.Entry),  // 来自ELF文件的call_start_cpu0地址
 ```
 
 ## 构建输出文件
